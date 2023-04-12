@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
+	"net/http"
+	"net/url"
 	"runtime"
 
 	"cloud.google.com/go/logging/apiv2/loggingpb"
@@ -14,7 +17,10 @@ import (
 )
 
 const (
-	LabelKey = "logging.googleapis.com/label"
+	LabelKey     = "labels"
+	RequestKey   = "request"
+	ResponseKey  = "response"
+	OperationKey = "operation"
 )
 
 // Options for a slog.Handler that writes tinted logs. A zero Options consists
@@ -62,29 +68,30 @@ func (h *handler) Enabled(_ context.Context, level slog.Level) bool {
 // Handle implements slog.Handler
 func (h *handler) Handle(ctx context.Context, r slog.Record) error {
 	var (
-		trace    = h.trace(ctx, r)
-		labels   = h.label(ctx, r)
-		severity = h.severity(ctx, r)
-		location = h.location(ctx, r)
+		name      = h.name(ctx, r)
+		trace     = h.trace(ctx, r)
+		labels    = h.label(ctx, r)
+		severity  = h.severity(ctx, r)
+		location  = h.location(ctx, r)
+		request   = h.request(ctx, r)
+		payload   = h.payload(ctx, r)
+		operation = h.operation(ctx, r)
+		timestamp = timestamppb.New(r.Time)
 	)
 
 	entry := &loggingpb.LogEntry{
-		LogName: "",
-		// Resource:         &monitoredres.MonitoredResource{},
-		Payload: &loggingpb.LogEntry_TextPayload{
-			TextPayload: r.Message,
-		},
-		Timestamp: timestamppb.New(r.Time),
-		Severity: severity,
+		LogName:   name,
+		Severity:  severity,
+		Timestamp: timestamp,
+		Payload:   payload,
+		Labels:    labels,
 		// InsertId:         "",
-		// HttpRequest:      &ltype.HttpRequest{},
-		Labels: labels,
-		// Operation:        &loggingpb.LogEntryOperation{},
+		HttpRequest:    request,
+		Operation:      operation,
 		SourceLocation: location,
 		Trace:          trace.Name,
 		TraceSampled:   trace.SpanContext.IsSampled(),
 		SpanId:         trace.SpanContext.SpanID.String(),
-		// Split: &loggingpb.LogSplit{},
 	}
 
 	encoder := json.NewEncoder(h.w)
@@ -117,6 +124,18 @@ func (h *handler) severity(_ context.Context, r slog.Record) ltype.LogSeverity {
 	}
 }
 
+func (h *handler) name(_ context.Context, r slog.Record) string {
+	return ""
+}
+
+func (h *handler) payload(_ context.Context, r slog.Record) *loggingpb.LogEntry_JsonPayload {
+	r.Attrs(func(attr slog.Attr) {
+		// TODO:
+	})
+
+	return nil
+}
+
 func (h *handler) location(_ context.Context, r slog.Record) *loggingpb.LogEntrySourceLocation {
 	frames := runtime.CallersFrames([]uintptr{r.PC})
 	frame, _ := frames.Next()
@@ -126,6 +145,30 @@ func (h *handler) location(_ context.Context, r slog.Record) *loggingpb.LogEntry
 		Line:     int64(frame.Line),
 		Function: frame.Function,
 	}
+}
+
+func (h *handler) request(_ context.Context, r slog.Record) *ltype.HttpRequest {
+	var request *ltype.HttpRequest
+
+	r.Attrs(func(attr slog.Attr) {
+		if attr.Key == OperationKey {
+			request, _ = attr.Value.Any().(*ltype.HttpRequest)
+		}
+	})
+
+	return request
+}
+
+func (h *handler) operation(_ context.Context, r slog.Record) *loggingpb.LogEntryOperation {
+	var operation *loggingpb.LogEntryOperation
+
+	r.Attrs(func(attr slog.Attr) {
+		if attr.Key == OperationKey {
+			operation, _ = attr.Value.Any().(*loggingpb.LogEntryOperation)
+		}
+	})
+
+	return operation
 }
 
 func (h *handler) trace(ctx context.Context, _ slog.Record) *trace.SpanData {
@@ -160,8 +203,147 @@ func (h *handler) label(_ context.Context, r slog.Record) map[string]string {
 // Use Label to collect several Attrs under a labels
 // key on a log line.
 func Label(attr ...slog.Attr) slog.Attr {
+	// TODO: resolve the attr
 	return slog.Attr{
 		Key:   LabelKey,
 		Value: slog.GroupValue(attr...),
+	}
+}
+
+// Label returns an Attr for a Http Request.
+// The caller must not subsequently mutate the
+// argument slice.
+//
+// Use Request to collect several Attrs under a HttpRequest
+// key on a log line.
+func Request(r *http.Request) slog.Attr {
+	if r.URL == nil {
+		r.URL = &url.URL{}
+	}
+
+	remoteIP := func() string {
+		if ip := r.Header.Get("X-Forwarded-For"); ip != "" {
+			return ip
+		}
+
+		ip, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			return r.RemoteAddr
+		}
+
+		return ip
+	}
+
+	serverIP := func() string {
+		if ip, err := net.LookupHost(r.Host); err == nil {
+			return ip[0]
+		}
+
+		return ""
+	}
+
+	value := &ltype.HttpRequest{
+		Protocol:      r.Proto,
+		RequestMethod: r.Method,
+		RequestUrl:    r.URL.String(),
+		RequestSize:   r.ContentLength,
+		Referer:       r.Referer(),
+		UserAgent:     r.UserAgent(),
+		RemoteIp:      remoteIP(),
+		ServerIp:      serverIP(),
+	}
+
+	return slog.Attr{
+		Key:   RequestKey,
+		Value: slog.AnyValue(value),
+	}
+}
+
+func Response(r *http.Response) slog.Attr {
+	value := &ltype.HttpRequest{
+		ResponseSize: r.ContentLength,
+		Status:       int32(r.StatusCode),
+	}
+
+	return slog.Attr{
+		Key:   ResponseKey,
+		Value: slog.AnyValue(value),
+	}
+}
+
+func ResponseWriter(r http.ResponseWriter) slog.Attr {
+	type ResponseWriter interface {
+		GetStatusCode() int32
+		GetContentLength() int64
+	}
+
+	value := &ltype.HttpRequest{}
+
+	if rw, ok := r.(ResponseWriter); ok {
+		value = &ltype.HttpRequest{
+			Status:       rw.GetStatusCode(),
+			ResponseSize: rw.GetContentLength(),
+		}
+	}
+
+	return slog.Attr{
+		Key:   ResponseKey,
+		Value: slog.AnyValue(value),
+	}
+}
+
+// OperationStart is a function for logging `Operation`. It should be called
+// for the first operation log.
+func OperationStart(id, producer string) slog.Attr {
+	value := &loggingpb.LogEntryOperation{
+		Id:       id,
+		Producer: producer,
+		First:    true,
+		Last:     false,
+	}
+
+	return slog.Attr{
+		Key:   OperationKey,
+		Value: slog.AnyValue(value),
+	}
+}
+
+// OperationContinue is a function for logging `Operation`. It should be called
+// for any non-start/end operation log.
+func OperationContinue(id, producer string) slog.Attr {
+	value := &loggingpb.LogEntryOperation{
+		Id:       id,
+		Producer: producer,
+		First:    false,
+		Last:     false,
+	}
+
+	return slog.Attr{
+		Key:   OperationKey,
+		Value: slog.AnyValue(value),
+	}
+}
+
+// OperationEnd is a function for logging `Operation`. It should be called
+// for the last operation log.
+func OperationEnd(id, producer string) slog.Attr {
+	value := &loggingpb.LogEntryOperation{
+		Id:       id,
+		Producer: producer,
+		First:    false,
+		Last:     true,
+	}
+
+	return slog.Attr{
+		Key:   OperationKey,
+		Value: slog.AnyValue(value),
+	}
+}
+
+// Error returns an error attribute
+func Error(err error) slog.Attr {
+	return slog.Attr{
+		Key:   OperationKey,
+		Value: slog.StringValue(err.Error()),
 	}
 }
