@@ -16,19 +16,28 @@ import (
 
 func init() {
 	// create the options
-	options := slog.HandlerOptions{
-		AddSource: true,
+	// options := slog.HandlerOptions{}
+	// create the handler
+	// handler := options.NewJSONHandler(os.Stderr)
+
+	// create the options
+	options := stack.HandlerOptions{
+		ProjectID: "prj-d-platform-952f",
 	}
 	// create the handler
-	handler := options.NewJSONHandler(os.Stderr)
+	handler := options.NewHandler(os.Stderr)
+
 	// create the logger
 	logger := slog.New(handler).With(
-    stack.Name("run.googleapis.com/user-api"),
+		stack.Name("run.googleapis.com/user-api"),
 		stack.Label(
-			slog.Group("service",
-				slog.String("name", "user-api"),
-				slog.String("version", "v1.0"),
-				slog.String("revision", "ee2c1207"),
+			slog.String("my_org", "cliche-press"),
+			slog.Group("my_app",
+				slog.Group("service",
+					slog.String("name", "user-api"),
+					slog.String("version", "v1.0"),
+					slog.String("revision", "ee2c1207"),
+				),
 			),
 		),
 	)

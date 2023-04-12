@@ -14,6 +14,7 @@ import (
 	"golang.org/x/exp/slog"
 	ltype "google.golang.org/genproto/googleapis/logging/type"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -25,13 +26,19 @@ const (
 	OperationKey = "operation"
 )
 
-// Options for a slog.Handler that writes tinted logs. A zero Options consists
+// HandlerOptions for a slog.Handler that writes tinted logs. A zero HandlerOptions consists
 // entirely of default values.
-type Options struct {
-	// ProjectId is Google Cloud Project ID
+type HandlerOptions struct {
+	// ProjectID is Google Cloud Project ID
 	// If you want to use trace_id, you should set this or set GOOGLE_CLOUD_PROJECT environment.
 	// Cloud Shell and App Engine set this environment variable to the project ID, so use it if present.
 	ProjectID string
+
+	// When AddSource is true, the handler adds a ("source", "file:line")
+	// attribute to the output indicating the source code position of the log
+	// statement. AddSource is false by default to skip the cost of computing
+	// this information.
+	AddSource bool
 
 	// Minimum level to log (Default: slog.InfoLevel)
 	Level slog.Level
@@ -39,11 +46,12 @@ type Options struct {
 
 // NewHandler creates a [slog.Handler] that writes tinted logs to w with the
 // given options.
-func (opts Options) NewHandler(w io.Writer) slog.Handler {
-	h := &handler{
-		w:       w,
+func (opts HandlerOptions) NewHandler(writer io.Writer) slog.Handler {
+	h := &Handler{
+		writer:  writer,
 		level:   opts.Level,
-		project: "projects/" + opts.ProjectID,
+		source:  opts.AddSource,
+		project: opts.ProjectID,
 	}
 
 	return h
@@ -52,26 +60,31 @@ func (opts Options) NewHandler(w io.Writer) slog.Handler {
 // NewHandler creates a [slog.Handler] that writes tinted logs to w, using the default
 // options.
 func NewHandler(w io.Writer) slog.Handler {
-	return (Options{}).NewHandler(w)
+	return (HandlerOptions{}).NewHandler(w)
 }
 
-// handler implements a [slog.handler].
-type handler struct {
-	w       io.Writer
+// Handler implements a [slog.Handler].
+type Handler struct {
+	writer  io.Writer
 	level   slog.Level
+	group   string
+	attrs   []slog.Attr
 	project string
+	source  bool
 }
 
 // Enabled implements slog.Handler
-func (h *handler) Enabled(_ context.Context, level slog.Level) bool {
+func (h *Handler) Enabled(_ context.Context, level slog.Level) bool {
 	return level >= h.level
 }
 
 // Handle implements slog.Handler
-func (h *handler) Handle(ctx context.Context, r slog.Record) error {
+func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
+	r = r.Clone()
+	r.AddAttrs(h.attrs...)
+
 	var (
 		name      = h.name(ctx, r)
-		trace     = h.trace(ctx, r)
 		labels    = h.label(ctx, r)
 		severity  = h.severity(ctx, r)
 		location  = h.location(ctx, r)
@@ -90,27 +103,44 @@ func (h *handler) Handle(ctx context.Context, r slog.Record) error {
 		HttpRequest:    request,
 		Operation:      operation,
 		SourceLocation: location,
-		Trace:          trace.Name,
-		TraceSampled:   trace.SpanContext.IsSampled(),
-		SpanId:         trace.SpanContext.SpanID.String(),
 	}
 
-	encoder := json.NewEncoder(h.w)
+	if trace := h.trace(ctx, r); trace != nil {
+		entry.Trace = trace.Name
+		entry.TraceSampled = trace.SpanContext.IsSampled()
+		entry.SpanId = trace.SpanContext.SpanID.String()
+	}
+
+	encoder := json.NewEncoder(h.writer)
 
 	return encoder.Encode(entry)
 }
 
 // WithAttrs implements slog.Handler
-func (*handler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	panic("unimplemented")
+func (h *Handler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	c := h.clone()
+	c.attrs = append(c.attrs, attrs...)
+
+	return c
 }
 
 // WithGroup implements slog.Handler
-func (*handler) WithGroup(name string) slog.Handler {
-	panic("unimplemented")
+func (h *Handler) WithGroup(name string) slog.Handler {
+	return h
 }
 
-func (h *handler) severity(_ context.Context, r slog.Record) ltype.LogSeverity {
+func (h *Handler) clone() *Handler {
+	return &Handler{
+		writer:  h.writer,
+		level:   h.level,
+		group:   h.group,
+		attrs:   h.attrs,
+		source:  h.source,
+		project: h.project,
+	}
+}
+
+func (h *Handler) severity(_ context.Context, r slog.Record) ltype.LogSeverity {
 	switch r.Level {
 	case slog.LevelDebug:
 		return ltype.LogSeverity_DEBUG
@@ -125,56 +155,96 @@ func (h *handler) severity(_ context.Context, r slog.Record) ltype.LogSeverity {
 	}
 }
 
-func (h *handler) name(_ context.Context, r slog.Record) string {
+func (h *Handler) name(_ context.Context, r slog.Record) string {
 	var name string
 
-	r.Attrs(func(attr slog.Attr) {
-		if attr.Key == NameKey {
-			name = h.project + "/" + url.PathEscape(attr.Value.String())
-		}
-	})
+	if h.project != "" {
+		r.Attrs(func(attr slog.Attr) {
+			if attr.Key == NameKey {
+				name = h.path(url.PathEscape(attr.Value.String()))
+			}
+		})
+	}
 
 	return name
 }
 
-func (h *handler) payload(_ context.Context, r slog.Record) *loggingpb.LogEntry_JsonPayload {
+func (h *Handler) payload(_ context.Context, r slog.Record) *loggingpb.LogEntry_JsonPayload {
+	props := make(map[string]interface{})
+
 	r.Attrs(func(attr slog.Attr) {
-		// TODO:
+		switch attr.Key {
+		case NameKey:
+			return
+		case LabelKey:
+			return
+		case RequestKey:
+			return
+		case ResponseKey:
+			return
+		case OperationKey:
+			return
+		default:
+			// set the value
+			props[attr.Key] = value(attr.Value)
+		}
 	})
+
+	props["message"] = r.Message
+	// construct the payload
+	value, err := structpb.NewStruct(props)
+	if err != nil {
+		panic(err)
+	}
+
+	return &loggingpb.LogEntry_JsonPayload{
+		JsonPayload: value,
+	}
+}
+
+func (h *Handler) location(_ context.Context, r slog.Record) *loggingpb.LogEntrySourceLocation {
+	if h.source {
+		frames := runtime.CallersFrames([]uintptr{r.PC})
+		frame, _ := frames.Next()
+
+		return &loggingpb.LogEntrySourceLocation{
+			File:     frame.File,
+			Line:     int64(frame.Line),
+			Function: frame.Function,
+		}
+	}
 
 	return nil
 }
 
-func (h *handler) location(_ context.Context, r slog.Record) *loggingpb.LogEntrySourceLocation {
-	frames := runtime.CallersFrames([]uintptr{r.PC})
-	frame, _ := frames.Next()
-
-	return &loggingpb.LogEntrySourceLocation{
-		File:     frame.File,
-		Line:     int64(frame.Line),
-		Function: frame.Function,
-	}
-}
-
-func (h *handler) request(_ context.Context, r slog.Record) *ltype.HttpRequest {
-	var request *ltype.HttpRequest
+func (h *Handler) request(_ context.Context, r slog.Record) *ltype.HttpRequest {
+	var (
+		count   = 0
+		request = &ltype.HttpRequest{}
+	)
 
 	r.Attrs(func(attr slog.Attr) {
 		if attr.Key == RequestKey {
 			value, _ := attr.Value.Any().(*ltype.HttpRequest)
 			proto.Merge(request, value)
+			count++
 		}
 
 		if attr.Key == ResponseKey {
 			value, _ := attr.Value.Any().(*ltype.HttpRequest)
 			proto.Merge(request, value)
+			count++
 		}
 	})
+
+	if count == 0 {
+		request = nil
+	}
 
 	return request
 }
 
-func (h *handler) operation(_ context.Context, r slog.Record) *loggingpb.LogEntryOperation {
+func (h *Handler) operation(_ context.Context, r slog.Record) *loggingpb.LogEntryOperation {
 	var operation *loggingpb.LogEntryOperation
 
 	r.Attrs(func(attr slog.Attr) {
@@ -186,29 +256,57 @@ func (h *handler) operation(_ context.Context, r slog.Record) *loggingpb.LogEntr
 	return operation
 }
 
-func (h *handler) trace(ctx context.Context, _ slog.Record) *trace.SpanData {
-	data := &trace.SpanData{}
+func (h *Handler) trace(ctx context.Context, _ slog.Record) *trace.SpanData {
+	var data *trace.SpanData
 
-	if span := trace.FromContext(ctx); span != nil {
-		data.SpanContext = span.SpanContext()
-		data.Name = h.project + "/" + data.SpanContext.TraceID.String()
+	if h.project != "" {
+		if span := trace.FromContext(ctx); span != nil {
+			data = &trace.SpanData{}
+			data.SpanContext = span.SpanContext()
+			data.Name = h.path(data.SpanContext.TraceID.String())
+		}
 	}
 
 	return data
 }
 
-func (h *handler) label(_ context.Context, r slog.Record) map[string]string {
+func (h *Handler) label(_ context.Context, r slog.Record) map[string]string {
 	kv := make(map[string]string)
 
 	r.Attrs(func(attr slog.Attr) {
 		if attr.Key == LabelKey {
-			for _, label := range attr.Value.Group() {
-				kv[label.Key] = label.Value.String()
+			for _, item := range attr.Value.Group() {
+				for _, label := range h.flatten(item) {
+					kv[label.Key] = label.Value.String()
+				}
 			}
 		}
 	})
 
 	return kv
+}
+
+func (h *Handler) path(key string) string {
+	return "projects/" + h.project + "/" + key
+}
+
+func (h *Handler) flatten(attr slog.Attr) []slog.Attr {
+	var collection []slog.Attr
+
+	switch attr.Value.Kind() {
+	case slog.KindGroup:
+		for _, item := range attr.Value.Group() {
+			elem := slog.Attr{
+				Key:   attr.Key + "." + item.Key,
+				Value: item.Value,
+			}
+			collection = append(collection, h.flatten(elem)...)
+		}
+	default:
+		collection = append(collection, attr)
+	}
+
+	return collection
 }
 
 // Name returns an Attr for a log name.
@@ -233,10 +331,7 @@ func Name(value string) slog.Attr {
 // Use Label to collect several Attrs under a labels
 // key on a log line.
 func Label(attr ...slog.Attr) slog.Attr {
-	return slog.Attr{
-		Key:   LabelKey,
-		Value: slog.GroupValue(attr...),
-	}
+	return slog.Group(LabelKey, attr...)
 }
 
 // Request returns an Attr for a http.Request.
@@ -386,5 +481,38 @@ func Error(err error) slog.Attr {
 	return slog.Attr{
 		Key:   OperationKey,
 		Value: slog.StringValue(err.Error()),
+	}
+}
+
+func value(v slog.Value) interface{} {
+	switch v.Kind() {
+	case slog.KindString:
+		return v.String()
+	case slog.KindInt64:
+		return v.Int64()
+	case slog.KindUint64:
+		return v.Uint64()
+	case slog.KindFloat64:
+		return v.Float64()
+	case slog.KindBool:
+		return v.Bool()
+	case slog.KindDuration:
+		return v.Duration()
+	case slog.KindTime:
+		return v.Time()
+	case slog.KindAny:
+		return v.Any()
+	case slog.KindLogValuer:
+		return value(v.LogValuer().LogValue())
+	case slog.KindGroup:
+		kv := make(map[string]interface{})
+
+		for _, attr := range v.Group() {
+			kv[attr.Key] = value(attr.Value)
+		}
+
+		return kv
+	default:
+		return nil
 	}
 }
