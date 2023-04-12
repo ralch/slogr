@@ -1,2 +1,3 @@
 # stack
-slog.Handler that prints log records for Google Logging 
+
+[slog.Handler](https://pkg.go.dev/golang.org/x/exp/slog) that prints log records for Google Logging
