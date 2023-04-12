@@ -13,10 +13,12 @@ import (
 	"go.opencensus.io/trace"
 	"golang.org/x/exp/slog"
 	ltype "google.golang.org/genproto/googleapis/logging/type"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
+	NameKey      = "name"
 	LabelKey     = "labels"
 	RequestKey   = "request"
 	ResponseKey  = "response"
@@ -80,12 +82,11 @@ func (h *handler) Handle(ctx context.Context, r slog.Record) error {
 	)
 
 	entry := &loggingpb.LogEntry{
-		LogName:   name,
-		Severity:  severity,
-		Timestamp: timestamp,
-		Payload:   payload,
-		Labels:    labels,
-		// InsertId:         "",
+		LogName:        name,
+		Severity:       severity,
+		Timestamp:      timestamp,
+		Payload:        payload,
+		Labels:         labels,
 		HttpRequest:    request,
 		Operation:      operation,
 		SourceLocation: location,
@@ -125,7 +126,15 @@ func (h *handler) severity(_ context.Context, r slog.Record) ltype.LogSeverity {
 }
 
 func (h *handler) name(_ context.Context, r slog.Record) string {
-	return ""
+	var name string
+
+	r.Attrs(func(attr slog.Attr) {
+		if attr.Key == NameKey {
+			name = h.project + "/" + url.PathEscape(attr.Value.String())
+		}
+	})
+
+	return name
 }
 
 func (h *handler) payload(_ context.Context, r slog.Record) *loggingpb.LogEntry_JsonPayload {
@@ -151,8 +160,14 @@ func (h *handler) request(_ context.Context, r slog.Record) *ltype.HttpRequest {
 	var request *ltype.HttpRequest
 
 	r.Attrs(func(attr slog.Attr) {
-		if attr.Key == OperationKey {
-			request, _ = attr.Value.Any().(*ltype.HttpRequest)
+		if attr.Key == RequestKey {
+			value, _ := attr.Value.Any().(*ltype.HttpRequest)
+			proto.Merge(request, value)
+		}
+
+		if attr.Key == ResponseKey {
+			value, _ := attr.Value.Any().(*ltype.HttpRequest)
+			proto.Merge(request, value)
 		}
 	})
 
@@ -196,6 +211,21 @@ func (h *handler) label(_ context.Context, r slog.Record) map[string]string {
 	return kv
 }
 
+// Name returns an Attr for a log name.
+// The caller must not subsequently mutate the
+// argument slice.
+//
+// Use Label to collect several Attrs under a name
+// key on a log line.
+func Name(value string) slog.Attr {
+	value = url.PathEscape(value)
+
+	return slog.Attr{
+		Key:   NameKey,
+		Value: slog.StringValue(value),
+	}
+}
+
 // Label returns an Attr for a Group Label.
 // The caller must not subsequently mutate the
 // argument slice.
@@ -203,14 +233,13 @@ func (h *handler) label(_ context.Context, r slog.Record) map[string]string {
 // Use Label to collect several Attrs under a labels
 // key on a log line.
 func Label(attr ...slog.Attr) slog.Attr {
-	// TODO: resolve the attr
 	return slog.Attr{
 		Key:   LabelKey,
 		Value: slog.GroupValue(attr...),
 	}
 }
 
-// Label returns an Attr for a Http Request.
+// Request returns an Attr for a http.Request.
 // The caller must not subsequently mutate the
 // argument slice.
 //
@@ -259,6 +288,12 @@ func Request(r *http.Request) slog.Attr {
 	}
 }
 
+// Respone returns an Attr for a http.Respone.
+// The caller must not subsequently mutate the
+// argument slice.
+//
+// Use Response to collect several Attrs under a HttpRequest
+// key on a log line.
 func Response(r *http.Response) slog.Attr {
 	value := &ltype.HttpRequest{
 		ResponseSize: r.ContentLength,
@@ -271,6 +306,12 @@ func Response(r *http.Response) slog.Attr {
 	}
 }
 
+// ResponseWriter returns an Attr for a http.ResponseWriter.
+// The caller must not subsequently mutate the
+// argument slice.
+//
+// Use Response to collect several Attrs under a HttpRequest
+// key on a log line.
 func ResponseWriter(r http.ResponseWriter) slog.Attr {
 	type ResponseWriter interface {
 		GetStatusCode() int32

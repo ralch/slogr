@@ -23,6 +23,7 @@ func init() {
 	handler := options.NewJSONHandler(os.Stderr)
 	// create the logger
 	logger := slog.New(handler).With(
+    stack.Name("run.googleapis.com/user-api"),
 		stack.Label(
 			slog.Group("service",
 				slog.String("name", "user-api"),
