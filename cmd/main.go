@@ -23,6 +23,7 @@ func init() {
 	// create the options
 	options := stack.HandlerOptions{
 		ProjectID: "prj-d-platform-952f",
+		UseIndent: true,
 	}
 	// create the handler
 	handler := options.NewHandler(os.Stderr)

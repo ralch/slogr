@@ -2,7 +2,6 @@ package stack
 
 import (
 	"context"
-	"encoding/json"
 	"io"
 	"net"
 	"net/http"
@@ -13,6 +12,7 @@ import (
 	"go.opencensus.io/trace"
 	"golang.org/x/exp/slog"
 	ltype "google.golang.org/genproto/googleapis/logging/type"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -40,6 +40,10 @@ type HandlerOptions struct {
 	// this information.
 	AddSource bool
 
+	// UseIndent instructs the encoder to format each subsequent encoded
+	// value as if indented by the package-level function Indent(dst, src, prefix, indent).
+	UseIndent bool
+
 	// Minimum level to log (Default: slog.InfoLevel)
 	Level slog.Level
 }
@@ -50,6 +54,7 @@ func (opts HandlerOptions) NewHandler(writer io.Writer) slog.Handler {
 	h := &Handler{
 		writer:  writer,
 		level:   opts.Level,
+		indent:  opts.UseIndent,
 		source:  opts.AddSource,
 		project: opts.ProjectID,
 	}
@@ -70,6 +75,7 @@ type Handler struct {
 	group   string
 	attrs   []slog.Attr
 	project string
+	indent  bool
 	source  bool
 }
 
@@ -111,9 +117,19 @@ func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
 		entry.SpanId = trace.SpanContext.SpanID.String()
 	}
 
-	encoder := json.NewEncoder(h.writer)
+	encoder := protojson.MarshalOptions{
+		Multiline:     h.indent,
+		AllowPartial:  true,
+		UseProtoNames: false,
+	}
 
-	return encoder.Encode(entry)
+	data, err := encoder.Marshal(entry)
+	if err != nil {
+		return err
+	}
+
+	_, err = h.writer.Write(data)
+	return err
 }
 
 // WithAttrs implements slog.Handler
@@ -126,6 +142,7 @@ func (h *Handler) WithAttrs(attrs []slog.Attr) slog.Handler {
 
 // WithGroup implements slog.Handler
 func (h *Handler) WithGroup(name string) slog.Handler {
+	// TODO: implement it
 	return h
 }
 
@@ -136,6 +153,7 @@ func (h *Handler) clone() *Handler {
 		group:   h.group,
 		attrs:   h.attrs,
 		source:  h.source,
+		indent:  h.indent,
 		project: h.project,
 	}
 }
@@ -185,8 +203,7 @@ func (h *Handler) payload(_ context.Context, r slog.Record) *loggingpb.LogEntry_
 		case OperationKey:
 			return
 		default:
-			// set the value
-			props[attr.Key] = value(attr.Value)
+			props[attr.Key] = h.value(attr.Value)
 		}
 	})
 
@@ -288,6 +305,39 @@ func (h *Handler) label(_ context.Context, r slog.Record) map[string]string {
 
 func (h *Handler) path(key string) string {
 	return "projects/" + h.project + "/" + key
+}
+
+func (h *Handler) value(v slog.Value) interface{} {
+	switch v.Kind() {
+	case slog.KindString:
+		return v.String()
+	case slog.KindInt64:
+		return v.Int64()
+	case slog.KindUint64:
+		return v.Uint64()
+	case slog.KindFloat64:
+		return v.Float64()
+	case slog.KindBool:
+		return v.Bool()
+	case slog.KindDuration:
+		return v.Duration()
+	case slog.KindTime:
+		return v.Time()
+	case slog.KindAny:
+		return v.Any()
+	case slog.KindLogValuer:
+		return h.value(v.LogValuer().LogValue())
+	case slog.KindGroup:
+		kv := make(map[string]interface{})
+
+		for _, attr := range v.Group() {
+			kv[attr.Key] = h.value(attr.Value)
+		}
+
+		return kv
+	default:
+		return nil
+	}
 }
 
 func (h *Handler) flatten(attr slog.Attr) []slog.Attr {
@@ -481,38 +531,5 @@ func Error(err error) slog.Attr {
 	return slog.Attr{
 		Key:   OperationKey,
 		Value: slog.StringValue(err.Error()),
-	}
-}
-
-func value(v slog.Value) interface{} {
-	switch v.Kind() {
-	case slog.KindString:
-		return v.String()
-	case slog.KindInt64:
-		return v.Int64()
-	case slog.KindUint64:
-		return v.Uint64()
-	case slog.KindFloat64:
-		return v.Float64()
-	case slog.KindBool:
-		return v.Bool()
-	case slog.KindDuration:
-		return v.Duration()
-	case slog.KindTime:
-		return v.Time()
-	case slog.KindAny:
-		return v.Any()
-	case slog.KindLogValuer:
-		return value(v.LogValuer().LogValue())
-	case slog.KindGroup:
-		kv := make(map[string]interface{})
-
-		for _, attr := range v.Group() {
-			kv[attr.Key] = value(attr.Value)
-		}
-
-		return kv
-	default:
-		return nil
 	}
 }
