@@ -41,8 +41,12 @@ type HandlerOptions struct {
 	// this information.
 	AddSource bool
 
-	// Minimum level to log (Default: slog.InfoLevel)
-	Level slog.Level
+  // Level reports the minimum record level that will be logged.
+	// The handler discards records with lower levels.
+	// If Level is nil, the handler assumes LevelInfo.
+	// The handler calls Level.Level for each record processed;
+	// to adjust the minimum level dynamically, use a LevelVar.
+	Level slog.Leveler
 }
 
 // NewHandler creates a [slog.Handler] that writes tinted logs to w with the
@@ -50,7 +54,7 @@ type HandlerOptions struct {
 func (opts HandlerOptions) NewHandler(writer io.Writer) slog.Handler {
 	h := &Handler{
 		writer:  writer,
-		level:   opts.Level,
+		leveler: opts.Level,
 		source:  opts.AddSource,
 		project: opts.ProjectID,
 	}
@@ -64,14 +68,10 @@ func NewHandler(w io.Writer) slog.Handler {
 	return (HandlerOptions{}).NewHandler(w)
 }
 
-type AttrFunc func() slog.Attr
-
-type AttrHandler func(fn AttrFunc) AttrFunc
-
 // Handler implements a [slog.Handler].
 type Handler struct {
+	leveler slog.Leveler
 	writer  io.Writer
-	level   slog.Level
 	project string
 	source  bool
 	attr    []slog.Attr
@@ -79,7 +79,7 @@ type Handler struct {
 
 // Enabled implements slog.Handler
 func (h *Handler) Enabled(_ context.Context, level slog.Level) bool {
-	return level >= h.level
+	return level >= h.leveler.Level()
 }
 
 // Handle implements slog.Handler
