@@ -4,21 +4,16 @@ go 1.20
 
 require (
 	cloud.google.com/go/logging v1.7.0
-	github.com/bufbuild/connect-go v1.6.0
-	github.com/go-chi/chi/v5 v5.0.8
-	github.com/godror/knownpb v0.1.1
 	go.opencensus.io v0.24.0
-	golang.org/x/exp v0.0.0-20230321023759-10a507213a29
+	golang.org/x/exp v0.0.0-20230420155640-133eef4313cb
 	google.golang.org/genproto v0.0.0-20230222225845-10f96fb3dbec
 	google.golang.org/protobuf v1.28.1
 )
 
 require (
 	cloud.google.com/go/longrunning v0.3.0 // indirect
-	github.com/gofrs/uuid v4.4.0+incompatible // indirect
 	github.com/golang/groupcache v0.0.0-20200121045136-8c9f03a8e57e // indirect
 	github.com/golang/protobuf v1.5.2 // indirect
-	github.com/leodido/go-urn v1.2.3 // indirect
 	golang.org/x/net v0.7.0 // indirect
 	golang.org/x/sys v0.5.0 // indirect
 	golang.org/x/text v0.7.0 // indirect

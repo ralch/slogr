@@ -41,7 +41,7 @@ type HandlerOptions struct {
 	// this information.
 	AddSource bool
 
-  // Level reports the minimum record level that will be logged.
+	// Level reports the minimum record level that will be logged.
 	// The handler discards records with lower levels.
 	// If Level is nil, the handler assumes LevelInfo.
 	// The handler calls Level.Level for each record processed;
@@ -161,10 +161,13 @@ func (h *Handler) name(_ context.Context, r slog.Record) string {
 	var name string
 
 	if h.project != "" {
-		r.Attrs(func(attr slog.Attr) {
+		r.Attrs(func(attr slog.Attr) bool {
 			if attr.Key == NameKey {
 				name = h.path(url.PathEscape(attr.Value.String()))
+        return false
 			}
+
+      return true
 		})
 	}
 
@@ -174,20 +177,21 @@ func (h *Handler) name(_ context.Context, r slog.Record) string {
 func (h *Handler) payload(_ context.Context, r slog.Record) *loggingpb.LogEntry_JsonPayload {
 	props := make(map[string]interface{})
 
-	r.Attrs(func(attr slog.Attr) {
+	r.Attrs(func(attr slog.Attr) bool {
 		switch attr.Key {
 		case NameKey:
-			return
+			return true
 		case LabelKey:
-			return
+			return true
 		case RequestKey:
-			return
+			return true
 		case ResponseKey:
-			return
+			return true
 		case OperationKey:
-			return
+			return true
 		default:
 			props[attr.Key] = h.value(attr.Value)
+      return true
 		}
 	})
 
@@ -224,18 +228,26 @@ func (h *Handler) request(_ context.Context, r slog.Record) *ltype.HttpRequest {
 		request = &ltype.HttpRequest{}
 	)
 
-	r.Attrs(func(attr slog.Attr) {
+	r.Attrs(func(attr slog.Attr) bool {
 		if attr.Key == RequestKey {
 			value, _ := attr.Value.Any().(*ltype.HttpRequest)
 			proto.Merge(request, value)
 			count++
+			return false
 		}
 
+		return true
+	})
+
+	r.Attrs(func(attr slog.Attr) bool {
 		if attr.Key == ResponseKey {
 			value, _ := attr.Value.Any().(*ltype.HttpRequest)
 			proto.Merge(request, value)
 			count++
+			return false
 		}
+
+		return true
 	})
 
 	if count == 0 {
@@ -248,10 +260,13 @@ func (h *Handler) request(_ context.Context, r slog.Record) *ltype.HttpRequest {
 func (h *Handler) operation(_ context.Context, r slog.Record) *loggingpb.LogEntryOperation {
 	var operation *loggingpb.LogEntryOperation
 
-	r.Attrs(func(attr slog.Attr) {
+	r.Attrs(func(attr slog.Attr) bool {
 		if attr.Key == OperationKey {
 			operation, _ = attr.Value.Any().(*loggingpb.LogEntryOperation)
+			return false
 		}
+
+		return true
 	})
 
 	return operation
@@ -274,14 +289,18 @@ func (h *Handler) trace(ctx context.Context, _ slog.Record) *trace.SpanData {
 func (h *Handler) label(_ context.Context, r slog.Record) map[string]string {
 	kv := make(map[string]string)
 
-	r.Attrs(func(attr slog.Attr) {
+	r.Attrs(func(attr slog.Attr) bool {
 		if attr.Key == LabelKey {
 			for _, item := range attr.Value.Group() {
 				for _, label := range h.flatten(item) {
 					kv[label.Key] = label.Value.String()
 				}
 			}
+
+			return false
 		}
+
+		return true
 	})
 
 	return kv
@@ -346,7 +365,7 @@ func (h *Handler) flatten(attr slog.Attr) []slog.Attr {
 func (h *Handler) clone() *Handler {
 	return &Handler{
 		writer:  h.writer,
-		level:   h.level,
+		leveler: h.leveler,
 		project: h.project,
 		attr:    h.attr,
 	}
