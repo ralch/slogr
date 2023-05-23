@@ -1,6 +1,7 @@
-package stack
+package slogr
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"net"
@@ -125,7 +126,10 @@ func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
 		return err
 	}
 
-	_, err = h.writer.Write(data)
+	buffer := bytes.NewBuffer(data)
+	buffer.WriteString("\n")
+
+	_, err = io.Copy(h.writer, buffer)
 	return err
 }
 
@@ -164,10 +168,10 @@ func (h *Handler) name(_ context.Context, r slog.Record) string {
 		r.Attrs(func(attr slog.Attr) bool {
 			if attr.Key == NameKey {
 				name = h.path(url.PathEscape(attr.Value.String()))
-        return false
+				return false
 			}
 
-      return true
+			return true
 		})
 	}
 
@@ -191,7 +195,7 @@ func (h *Handler) payload(_ context.Context, r slog.Record) *loggingpb.LogEntry_
 			return true
 		default:
 			props[attr.Key] = h.value(attr.Value)
-      return true
+			return true
 		}
 	})
 
@@ -364,9 +368,10 @@ func (h *Handler) flatten(attr slog.Attr) []slog.Attr {
 
 func (h *Handler) clone() *Handler {
 	return &Handler{
-		writer:  h.writer,
 		leveler: h.leveler,
+		writer:  h.writer,
 		project: h.project,
+		source:  h.source,
 		attr:    h.attr,
 	}
 }
@@ -398,7 +403,7 @@ func Name(value string) slog.Attr {
 //
 // Use Label to collect several Attrs under a labels
 // key on a log line.
-func Label(attr ...slog.Attr) slog.Attr {
+func Label(attr ...any) slog.Attr {
 	return slog.Group(LabelKey, attr...)
 }
 

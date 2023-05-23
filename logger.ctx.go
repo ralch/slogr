@@ -1,10 +1,16 @@
-package stack
+package slogr
 
 import (
 	"context"
+	"reflect"
 
 	"golang.org/x/exp/slog"
 )
+
+// LoggerKey represents the context key of the logger.
+var LoggerKey = &ContextKey{
+	name: reflect.TypeOf(ContextKey{}).PkgPath(),
+}
 
 // ContextKey represents a context key.
 type ContextKey struct {
@@ -15,9 +21,6 @@ type ContextKey struct {
 func (k *ContextKey) String() string {
 	return k.name
 }
-
-// LoggerKey represents the context key of the logger.
-var LoggerKey = &ContextKey{name: "stack"}
 
 // FromContext returns the logger from a given context.
 func FromContext(ctx context.Context) *slog.Logger {
