@@ -50,25 +50,6 @@ type HandlerOptions struct {
 	Level slog.Leveler
 }
 
-// NewHandler creates a [slog.Handler] that writes tinted logs to w with the
-// given options.
-func (opts HandlerOptions) NewHandler(writer io.Writer) slog.Handler {
-	h := &Handler{
-		writer:  writer,
-		leveler: opts.Level,
-		source:  opts.AddSource,
-		project: opts.ProjectID,
-	}
-
-	return h
-}
-
-// NewHandler creates a [slog.Handler] that writes tinted logs to w, using the default
-// options.
-func NewHandler(w io.Writer) slog.Handler {
-	return (HandlerOptions{}).NewHandler(w)
-}
-
 // Handler implements a [slog.Handler].
 type Handler struct {
 	leveler slog.Leveler
@@ -76,6 +57,19 @@ type Handler struct {
 	project string
 	source  bool
 	attr    []slog.Attr
+}
+
+// NewHandler creates a [slog.Handler] that writes tinted logs to w, using the default
+// options.
+func NewHandler(w io.Writer, opts *HandlerOptions) slog.Handler {
+	h := &Handler{
+		writer:  w,
+		leveler: opts.Level,
+		source:  opts.AddSource,
+		project: opts.ProjectID,
+	}
+
+	return h
 }
 
 // Enabled implements slog.Handler
