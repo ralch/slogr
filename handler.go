@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"runtime"
 
 	"cloud.google.com/go/logging/apiv2/loggingpb"
@@ -161,7 +162,7 @@ func (h *Handler) name(_ context.Context, r slog.Record) string {
 	if h.project != "" {
 		r.Attrs(func(attr slog.Attr) bool {
 			if attr.Key == NameKey {
-				name = h.path(url.PathEscape(attr.Value.String()))
+				name = h.path("logs", url.PathEscape(attr.Value.String()))
 				return false
 			}
 
@@ -277,7 +278,7 @@ func (h *Handler) trace(ctx context.Context, _ slog.Record) *trace.SpanData {
 		if span := trace.FromContext(ctx); span != nil {
 			data = &trace.SpanData{}
 			data.SpanContext = span.SpanContext()
-			data.Name = h.path(data.SpanContext.TraceID.String())
+			data.Name = h.path("traces", data.SpanContext.TraceID.String())
 		}
 	}
 
@@ -304,8 +305,13 @@ func (h *Handler) label(_ context.Context, r slog.Record) map[string]string {
 	return kv
 }
 
-func (h *Handler) path(key string) string {
-	return "projects/" + h.project + "/" + key
+func (h *Handler) path(key ...string) string {
+	path := []string{}
+	path = append(path, "projects")
+	path = append(path, h.project)
+	path = append(path, key...)
+
+	return filepath.Join(path...)
 }
 
 func (h *Handler) value(v slog.Value) interface{} {
