@@ -11,7 +11,7 @@ import (
 	"runtime"
 
 	"cloud.google.com/go/logging/apiv2/loggingpb"
-	"go.opencensus.io/trace"
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/exp/slog"
 	ltype "google.golang.org/genproto/googleapis/logging/type"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -104,10 +104,10 @@ func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
 		SourceLocation: location,
 	}
 
-	if trace := h.trace(ctx, r); trace != nil {
-		entry.Trace = trace.Name
-		entry.TraceSampled = trace.SpanContext.IsSampled()
-		entry.SpanId = trace.SpanContext.SpanID.String()
+	if span := h.trace(ctx, r); span != nil {
+		entry.Trace = h.path("traces", span.TraceID().String())
+		entry.TraceSampled = span.IsSampled()
+		entry.SpanId = span.SpanID().String()
 	}
 
 	encoder := protojson.MarshalOptions{
@@ -271,18 +271,15 @@ func (h *Handler) operation(_ context.Context, r slog.Record) *loggingpb.LogEntr
 	return operation
 }
 
-func (h *Handler) trace(ctx context.Context, _ slog.Record) *trace.SpanData {
-	var data *trace.SpanData
-
+func (h *Handler) trace(ctx context.Context, _ slog.Record) *trace.SpanContext {
 	if h.project != "" {
-		if span := trace.FromContext(ctx); span != nil {
-			data = &trace.SpanData{}
-			data.SpanContext = span.SpanContext()
-			data.Name = h.path("traces", data.SpanContext.TraceID.String())
+		if span := trace.SpanFromContext(ctx); span != nil {
+			sctx := span.SpanContext()
+			return &sctx
 		}
 	}
 
-	return data
+	return nil
 }
 
 func (h *Handler) label(_ context.Context, r slog.Record) map[string]string {
