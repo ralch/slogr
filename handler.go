@@ -1,8 +1,8 @@
 package slogr
 
 import (
-	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net"
 	"net/http"
@@ -14,7 +14,6 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/exp/slog"
 	ltype "google.golang.org/genproto/googleapis/logging/type"
-	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -37,6 +36,9 @@ type HandlerOptions struct {
 	// Cloud Shell and App Engine set this environment variable to the project ID, so use it if present.
 	ProjectID string
 
+	// When AddIndent is true, the handler adds an ident to the JSON output.
+	AddIndent bool
+
 	// When AddSource is true, the handler adds a ("source", "file:line")
 	// attribute to the output indicating the source code position of the log
 	// statement. AddSource is false by default to skip the cost of computing
@@ -57,6 +59,7 @@ type Handler struct {
 	writer  io.Writer
 	project string
 	source  bool
+	indent  bool
 	attr    []slog.Attr
 }
 
@@ -67,6 +70,7 @@ func NewHandler(w io.Writer, opts *HandlerOptions) slog.Handler {
 		writer:  w,
 		leveler: opts.Level,
 		source:  opts.AddSource,
+		indent:  opts.AddIndent,
 		project: opts.ProjectID,
 	}
 
@@ -93,7 +97,7 @@ func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
 		timestamp = timestamppb.New(r.Time)
 	)
 
-	entry := &loggingpb.LogEntry{
+	entry := &Entry{
 		LogName:        name,
 		Severity:       severity,
 		Timestamp:      timestamp,
@@ -110,22 +114,13 @@ func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
 		entry.SpanId = span.SpanID().String()
 	}
 
-	encoder := protojson.MarshalOptions{
-		Multiline:     false,
-		AllowPartial:  true,
-		UseProtoNames: false,
+	encoder := json.NewEncoder(h.writer)
+	// enables the pretty format
+	if h.indent {
+		encoder.SetIndent("", "  ")
 	}
 
-	data, err := encoder.Marshal(entry)
-	if err != nil {
-		return err
-	}
-
-	buffer := bytes.NewBuffer(data)
-	buffer.WriteString("\n")
-
-	_, err = io.Copy(h.writer, buffer)
-	return err
+	return encoder.Encode(entry)
 }
 
 // WithAttrs implements slog.Handler
@@ -274,8 +269,9 @@ func (h *Handler) operation(_ context.Context, r slog.Record) *loggingpb.LogEntr
 func (h *Handler) trace(ctx context.Context, _ slog.Record) *trace.SpanContext {
 	if h.project != "" {
 		if span := trace.SpanFromContext(ctx); span != nil {
-			sctx := span.SpanContext()
-			return &sctx
+			if sctx := span.SpanContext(); sctx.IsValid() {
+				return &sctx
+			}
 		}
 	}
 
@@ -369,6 +365,7 @@ func (h *Handler) clone() *Handler {
 		writer:  h.writer,
 		project: h.project,
 		source:  h.source,
+		indent:  h.indent,
 		attr:    h.attr,
 	}
 }
