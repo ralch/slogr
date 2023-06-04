@@ -111,7 +111,7 @@ func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
 	}
 
 	encoder := protojson.MarshalOptions{
-		Multiline:     true,
+		Multiline:     false,
 		AllowPartial:  true,
 		UseProtoNames: false,
 	}
