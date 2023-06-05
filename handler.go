@@ -14,7 +14,6 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/exp/slog"
 	ltype "google.golang.org/genproto/googleapis/logging/type"
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -236,8 +235,8 @@ func (h *Handler) request(_ context.Context, r slog.Record) *ltype.HttpRequest {
 
 	r.Attrs(func(attr slog.Attr) bool {
 		if attr.Key == RequestKey {
-			value, _ := attr.Value.Any().(*ltype.HttpRequest)
-			proto.Merge(request, value)
+			request, _ = attr.Value.Any().(*ltype.HttpRequest)
+			// done!
 			count++
 			return false
 		}
@@ -247,8 +246,11 @@ func (h *Handler) request(_ context.Context, r slog.Record) *ltype.HttpRequest {
 
 	r.Attrs(func(attr slog.Attr) bool {
 		if attr.Key == ResponseKey {
-			value, _ := attr.Value.Any().(*ltype.HttpRequest)
-			proto.Merge(request, value)
+			response, _ := attr.Value.Any().(*ltype.HttpRequest)
+			// merge the request and response
+			request.Status = response.Status
+			request.ResponseSize = response.ResponseSize
+			// done!
 			count++
 			return false
 		}
@@ -420,13 +422,9 @@ func Label(attr ...any) slog.Attr {
 // Use Request to collect several Attrs under a HttpRequest
 // key on a log line.
 func Request(r *http.Request) slog.Attr {
-	if r.URL == nil {
-		r.URL = &url.URL{}
-	}
-
 	remoteIP := func() string {
-		if ip := r.Header.Get("X-Forwarded-For"); ip != "" {
-			return ip
+		if value := r.Header.Get("X-Forwarded-For"); value != "" {
+			return value
 		}
 
 		ip, _, err := net.SplitHostPort(r.RemoteAddr)
@@ -437,6 +435,12 @@ func Request(r *http.Request) slog.Attr {
 		return ip
 	}
 
+	if r.TLS == nil {
+		r.URL.Scheme = "http"
+	} else {
+		r.URL.Scheme = "https"
+	}
+
 	serverIP := func() string {
 		if ip, err := net.LookupHost(r.Host); err == nil {
 			return ip[0]
@@ -445,15 +449,41 @@ func Request(r *http.Request) slog.Attr {
 		return ""
 	}
 
+	requestURL := func() string {
+		uri := &url.URL{}
+
+		if r.TLS == nil {
+			uri.Scheme = "http"
+		} else {
+			uri.Scheme = "https"
+		}
+
+		if value := r.Header.Get("X-Forwarded-Proto"); value != "" {
+			uri.Scheme = value
+		}
+
+		uri.Host = r.Host
+
+		if value := r.Header.Get("X-Forwarded-Host"); value != "" {
+			uri.Host = value
+		}
+
+		if r.URL != nil {
+			uri.Path = r.URL.Path
+		}
+
+		return uri.String()
+	}
+
 	value := &ltype.HttpRequest{
 		Protocol:      r.Proto,
 		RequestMethod: r.Method,
-		RequestUrl:    r.URL.String(),
 		RequestSize:   r.ContentLength,
-		Referer:       r.Referer(),
-		UserAgent:     r.UserAgent(),
+		RequestUrl:    requestURL(),
 		RemoteIp:      remoteIP(),
 		ServerIp:      serverIP(),
+		Referer:       r.Referer(),
+		UserAgent:     r.UserAgent(),
 	}
 
 	return slog.Attr{
