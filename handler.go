@@ -101,11 +101,17 @@ func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
 		LogName:        name,
 		Severity:       severity,
 		Timestamp:      timestamp,
-		Payload:        payload,
 		Labels:         labels,
 		HttpRequest:    request,
 		Operation:      operation,
 		SourceLocation: location,
+	}
+
+	switch value := payload.(type) {
+	case *loggingpb.LogEntry_JsonPayload:
+		entry.Payload = value
+	case *loggingpb.LogEntry_TextPayload:
+		entry.Payload = value
 	}
 
 	if span := h.trace(ctx, r); span != nil {
@@ -168,7 +174,7 @@ func (h *Handler) name(_ context.Context, r slog.Record) string {
 	return name
 }
 
-func (h *Handler) payload(_ context.Context, r slog.Record) *loggingpb.LogEntry_JsonPayload {
+func (h *Handler) payload(_ context.Context, r slog.Record) interface{} {
 	props := make(map[string]interface{})
 
 	r.Attrs(func(attr slog.Attr) bool {
@@ -189,7 +195,13 @@ func (h *Handler) payload(_ context.Context, r slog.Record) *loggingpb.LogEntry_
 		}
 	})
 
-	props["message"] = r.Message
+	if count := len(props); count == 0 {
+		return &loggingpb.LogEntry_TextPayload{
+			TextPayload: r.Message,
+		}
+	}
+
+	props["logging.googleapis.com/message"] = r.Message
 	// construct the payload
 	value, err := structpb.NewStruct(props)
 	if err != nil {
