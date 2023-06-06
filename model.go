@@ -150,8 +150,8 @@ func (x *Entry) MarshalJSON() ([]byte, error) {
 
 	set("severity", x.Severity.String())
 	set("httpRequest", x.HttpRequest)
-	set("timestamp", x.Timestamp.AsTime())
 	set("message", x.GetPayload())
+	set("time", x.Timestamp.AsTime())
 	set("logging.googleapis.com/insertId", x.InsertId)
 	set("logging.googleapis.com/labels", x.Labels)
 	set("logging.googleapis.com/operation", x.Operation)

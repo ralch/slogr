@@ -14,6 +14,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/exp/slog"
 	ltype "google.golang.org/genproto/googleapis/logging/type"
+	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -422,7 +423,29 @@ func Label(attr ...any) slog.Attr {
 // Use Request to collect several Attrs under a HttpRequest
 // key on a log line.
 func Request(r *http.Request) slog.Attr {
-	remoteIP := func() string {
+	r = r.Clone(context.Background())
+
+	scheme := func() string {
+		if value := r.Header.Get("X-Forwarded-Proto"); value != "" {
+			return value
+		}
+
+		if r.TLS == nil {
+			return "http"
+		} else {
+			return "https"
+		}
+	}
+
+	host := func() string {
+		if value := r.Header.Get("X-Forwarded-Host"); value != "" {
+			return value
+		}
+
+		return r.Host
+	}
+
+	remote := func() string {
 		if value := r.Header.Get("X-Forwarded-For"); value != "" {
 			return value
 		}
@@ -435,55 +458,26 @@ func Request(r *http.Request) slog.Attr {
 		return ip
 	}
 
-	if r.TLS == nil {
-		r.URL.Scheme = "http"
-	} else {
-		r.URL.Scheme = "https"
-	}
-
-	serverIP := func() string {
-		if ip, err := net.LookupHost(r.Host); err == nil {
-			return ip[0]
-		}
-
-		return ""
-	}
-
-	requestURL := func() string {
-		uri := &url.URL{}
-
-		if r.TLS == nil {
-			uri.Scheme = "http"
-		} else {
-			uri.Scheme = "https"
-		}
-
-		if value := r.Header.Get("X-Forwarded-Proto"); value != "" {
-			uri.Scheme = value
-		}
-
-		uri.Host = r.Host
-
-		if value := r.Header.Get("X-Forwarded-Host"); value != "" {
-			uri.Host = value
-		}
-
-		if r.URL != nil {
-			uri.Path = r.URL.Path
-		}
-
-		return uri.String()
-	}
+	r.Host = host()
+	r.RemoteAddr = remote()
+	r.URL.Scheme = scheme()
+	r.URL.Host = host()
 
 	value := &ltype.HttpRequest{
 		Protocol:      r.Proto,
 		RequestMethod: r.Method,
 		RequestSize:   r.ContentLength,
-		RequestUrl:    requestURL(),
-		RemoteIp:      remoteIP(),
-		ServerIp:      serverIP(),
+		RequestUrl:    r.URL.String(),
+		RemoteIp:      r.RemoteAddr,
 		Referer:       r.Referer(),
 		UserAgent:     r.UserAgent(),
+	}
+
+	// we don't know the latency at this stage.
+	value.Latency = durationpb.New(0)
+	// set the remote ip
+	if addresses, err := net.LookupHost(r.Host); err == nil {
+		value.RemoteIp = addresses[0]
 	}
 
 	return slog.Attr{
