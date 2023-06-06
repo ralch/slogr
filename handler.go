@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"runtime"
+	"time"
 
 	"cloud.google.com/go/logging/apiv2/loggingpb"
 	"go.opentelemetry.io/otel/trace"
@@ -251,6 +252,10 @@ func (h *Handler) request(_ context.Context, r slog.Record) *ltype.HttpRequest {
 			// merge the request and response
 			request.Status = response.Status
 			request.ResponseSize = response.ResponseSize
+			// set the latency if present
+			if response.Latency != nil {
+				request.Latency = response.Latency
+			}
 			// done!
 			count++
 			return false
@@ -416,13 +421,35 @@ func Label(attr ...any) slog.Attr {
 	return slog.Group(LabelKey, attr...)
 }
 
+// RequestOption represents a request option
+type RequestOption interface {
+	Apply(*ltype.HttpRequest)
+}
+
+// RequestOptionFunc represents a request option function.
+type RequestOptionFunc func(*ltype.HttpRequest)
+
+// Apply the option.
+func (fn RequestOptionFunc) Apply(r *ltype.HttpRequest) {
+	fn(r)
+}
+
+// WithLatency sets the latency to a given request.
+func WithLatency(v time.Duration) RequestOption {
+	fn := func(r *ltype.HttpRequest) {
+		r.Latency = durationpb.New(v)
+	}
+
+	return RequestOptionFunc(fn)
+}
+
 // Request returns an Attr for a http.Request.
 // The caller must not subsequently mutate the
 // argument slice.
 //
 // Use Request to collect several Attrs under a HttpRequest
 // key on a log line.
-func Request(r *http.Request) slog.Attr {
+func Request(r *http.Request, opts ...RequestOption) slog.Attr {
 	r = r.Clone(context.Background())
 
 	scheme := func() string {
@@ -463,7 +490,7 @@ func Request(r *http.Request) slog.Attr {
 	r.URL.Scheme = scheme()
 	r.URL.Host = host()
 
-	value := &ltype.HttpRequest{
+	rr := &ltype.HttpRequest{
 		Protocol:      r.Proto,
 		RequestMethod: r.Method,
 		RequestSize:   r.ContentLength,
@@ -474,15 +501,20 @@ func Request(r *http.Request) slog.Attr {
 	}
 
 	// we don't know the latency at this stage.
-	value.Latency = durationpb.New(0)
+	rr.Latency = durationpb.New(0)
 	// set the remote ip
 	if addresses, err := net.LookupHost(r.Host); err == nil {
-		value.RemoteIp = addresses[0]
+		rr.RemoteIp = addresses[0]
+	}
+
+	// apply the options
+	for _, config := range opts {
+		config.Apply(rr)
 	}
 
 	return slog.Attr{
 		Key:   RequestKey,
-		Value: slog.AnyValue(value),
+		Value: slog.AnyValue(rr),
 	}
 }
 
@@ -492,10 +524,15 @@ func Request(r *http.Request) slog.Attr {
 //
 // Use Response to collect several Attrs under a HttpRequest
 // key on a log line.
-func Response(r *http.Response) slog.Attr {
+func Response(r *http.Response, opts ...RequestOption) slog.Attr {
 	value := &ltype.HttpRequest{
 		ResponseSize: r.ContentLength,
 		Status:       int32(r.StatusCode),
+	}
+
+	// apply the options
+	for _, config := range opts {
+		config.Apply(value)
 	}
 
 	return slog.Attr{
@@ -510,7 +547,7 @@ func Response(r *http.Response) slog.Attr {
 //
 // Use Response to collect several Attrs under a HttpRequest
 // key on a log line.
-func ResponseWriter(r http.ResponseWriter) slog.Attr {
+func ResponseWriter(r http.ResponseWriter, opts ...RequestOption) slog.Attr {
 	type ResponseWriter interface {
 		GetStatusCode() int32
 		GetContentLength() int64
@@ -523,6 +560,11 @@ func ResponseWriter(r http.ResponseWriter) slog.Attr {
 			Status:       rw.GetStatusCode(),
 			ResponseSize: rw.GetContentLength(),
 		}
+	}
+
+	// apply the options
+	for _, config := range opts {
+		config.Apply(value)
 	}
 
 	return slog.Attr{
