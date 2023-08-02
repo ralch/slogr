@@ -469,7 +469,15 @@ func Request(r *http.Request, opts ...RequestOption) slog.Attr {
 			return value
 		}
 
-		return r.Host
+		if value := r.Host; value != "" {
+			return value
+		}
+
+		if r.URL != nil {
+			return r.URL.Host
+		}
+
+		return ""
 	}
 
 	remote := func() string {
