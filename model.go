@@ -6,10 +6,10 @@ import (
 	"reflect"
 
 	"cloud.google.com/go/logging/apiv2/loggingpb"
-	"golang.org/x/exp/slog"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
+	"log/slog"
 )
 
 // LoggerKey represents the context key of the logger.

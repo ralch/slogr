@@ -13,11 +13,11 @@ import (
 
 	"cloud.google.com/go/logging/apiv2/loggingpb"
 	"go.opentelemetry.io/otel/trace"
-	"golang.org/x/exp/slog"
 	ltype "google.golang.org/genproto/googleapis/logging/type"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"log/slog"
 )
 
 const (

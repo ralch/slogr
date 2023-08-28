@@ -3,7 +3,7 @@ package slogr
 import (
 	"io"
 
-	"golang.org/x/exp/slog"
+	"log/slog"
 )
 
 // NewLogger crates a new logger instance.
