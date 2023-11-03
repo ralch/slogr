@@ -340,9 +340,9 @@ func (h *Handler) value(v slog.Value) interface{} {
 	case slog.KindBool:
 		return v.Bool()
 	case slog.KindDuration:
-		return durationpb.New(v.Duration())
+		return v.Duration().String()
 	case slog.KindTime:
-		return timestamppb.New(v.Time())
+		return v.Time().String()
 	case slog.KindAny:
 		return v.Any()
 	case slog.KindLogValuer:
