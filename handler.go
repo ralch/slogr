@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -17,7 +18,6 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
-	"log/slog"
 )
 
 const (
@@ -340,9 +340,9 @@ func (h *Handler) value(v slog.Value) interface{} {
 	case slog.KindBool:
 		return v.Bool()
 	case slog.KindDuration:
-		return v.Duration()
+		return durationpb.New(v.Duration())
 	case slog.KindTime:
-		return v.Time()
+		return timestamppb.New(v.Time())
 	case slog.KindAny:
 		return v.Any()
 	case slog.KindLogValuer:
