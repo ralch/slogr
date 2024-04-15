@@ -3,12 +3,14 @@ package slogr
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"time"
 
@@ -344,7 +346,7 @@ func (h *Handler) value(v slog.Value) interface{} {
 	case slog.KindTime:
 		return v.Time().String()
 	case slog.KindAny:
-		return v.Any()
+		return h.transform(v.Any())
 	case slog.KindLogValuer:
 		return h.value(v.LogValuer().LogValue())
 	case slog.KindGroup:
@@ -358,6 +360,27 @@ func (h *Handler) value(v slog.Value) interface{} {
 	default:
 		return nil
 	}
+}
+
+func (h *Handler) transform(v any) any {
+	value := reflect.ValueOf(v)
+
+	if value.Kind() == reflect.Ptr {
+		value = value.Elem()
+	}
+
+	if value.Kind() == reflect.Slice {
+		collection := []any{}
+
+		for i := 0; i < value.Len(); i++ {
+			item := value.Index(i).Interface()
+			collection = append(collection, h.transform(item))
+		}
+
+		return collection
+	}
+
+	return fmt.Sprintf("%v", value)
 }
 
 func (h *Handler) flatten(attr slog.Attr) []slog.Attr {
